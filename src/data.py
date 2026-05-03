@@ -140,7 +140,6 @@ def _read_user_team_csv(p: Path) -> list[str]:
 _GROUP_ALIASES: dict[str, str] = {
     "USA": "United States",
     "Curacao": "Curaçao",
-    "Curaçao": "Curaçao",
 }
 
 
