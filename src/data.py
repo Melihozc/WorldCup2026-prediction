@@ -137,6 +137,13 @@ def _read_user_team_csv(p: Path) -> list[str]:
     return out
 
 
+_GROUP_ALIASES: dict[str, str] = {
+    "USA": "United States",
+    "Curacao": "Curaçao",
+    "Curaçao": "Curaçao",
+}
+
+
 def load_groups_2026(path: Path | None = None) -> list[list[str]]:
     """CSV'den grupları oku. Döndürür: 12 elemanlı liste, her eleman 4 takımlı liste (A→L sırası).
     CSV format: Group, Team kolonları.
@@ -148,6 +155,7 @@ def load_groups_2026(path: Path | None = None) -> list[list[str]]:
     for _, row in df.iterrows():
         g = str(row["Group"]).strip()
         t = str(row["Team"]).strip()
+        t = _GROUP_ALIASES.get(t, t)
         groups_dict.setdefault(g, []).append(t)
     return [groups_dict[k] for k in sorted(groups_dict)]
 
