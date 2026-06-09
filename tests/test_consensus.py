@@ -77,3 +77,23 @@ def test_infer_market_abilities_recovers_rank_and_reduces_kl():
     s = pd.Series(strengths)
     corr = np.corrcoef(mk.rank(), s.reindex(mk.index).rank())[0, 1]
     assert corr > 0.9
+
+
+def test_zscore_and_blend():
+    z = consensus._zscore_dict({"A": 10.0, "B": 0.0, "C": -10.0})
+    assert z["A"] > z["B"] > z["C"]
+    assert abs(np.mean(list(z.values()))) < 1e-9
+    blended = consensus.blend_strengths(
+        {"m": {"A": 1.0, "B": -1.0}, "h": {"A": 2.0, "B": -2.0}},
+        {"m": 0.5, "h": 0.5})
+    assert blended["A"] == pytest.approx(1.5)
+    assert blended["B"] == pytest.approx(-1.5)
+
+
+def test_blend_handles_missing_component_team():
+    blended = consensus.blend_strengths(
+        {"m": {"A": 1.0, "B": 1.0}, "h": {"A": 3.0}},  # B missing in h
+        {"m": 1.0, "h": 1.0})
+    # B: (1*1 + 1*0)/2 = 0.5 ; A: (1+3)/2 = 2.0
+    assert blended["A"] == pytest.approx(2.0)
+    assert blended["B"] == pytest.approx(0.5)

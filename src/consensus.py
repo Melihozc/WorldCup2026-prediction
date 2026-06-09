@@ -174,3 +174,41 @@ def infer_market_abilities(market_probs: pd.DataFrame, fixed_groups: list,
             s[t] -= mean_s
     return best_s, {"kl_history": kl_history, "final_kl": kl_history[-1] if kl_history else None,
                     "best_kl": best_kl}
+
+
+def _zscore_dict(raw: dict) -> dict:
+    vals = np.array(list(raw.values()), dtype=float)
+    mu = float(np.nanmean(vals))
+    sd = float(np.nanstd(vals))
+    if sd == 0 or not np.isfinite(sd):
+        return {k: 0.0 for k in raw}
+    return {k: float((v - mu) / sd) for k, v in raw.items()}
+
+
+def hist_ability(dc, teams: list) -> dict:
+    """Per-team scalar strength from Dixon-Coles: attack - defense, z-scored."""
+    raw = {t: dc.attack.get(t, 0.0) - dc.defense.get(t, 0.0) for t in teams}
+    return _zscore_dict(raw)
+
+
+def squad_ability(squad, teams: list, date) -> dict:
+    """Per-team log squad value (z-scored). Missing teams filled with the min."""
+    raw: dict = {}
+    for t in teams:
+        v, _age = squad.features(t, pd.Timestamp(date))
+        raw[t] = float(v) if np.isfinite(v) else np.nan
+    finite = [v for v in raw.values() if np.isfinite(v)]
+    fill = min(finite) if finite else 0.0
+    raw = {t: (v if np.isfinite(v) else fill) for t, v in raw.items()}
+    return _zscore_dict(raw)
+
+
+def blend_strengths(components: dict, weights: dict) -> dict:
+    """components: {name: {team: z}}. weights: {name: w}. Missing team in a
+    component contributes 0 (mean) for that component. Returns {team: blended}."""
+    teams: set = set()
+    for d in components.values():
+        teams |= set(d.keys())
+    wsum = float(sum(weights.values())) or 1.0
+    return {t: float(sum(weights[n] * components[n].get(t, 0.0) for n in components) / wsum)
+            for t in teams}
