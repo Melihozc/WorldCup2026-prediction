@@ -31,9 +31,11 @@ def main() -> None:
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--since", default="2014-01-01")
     ap.add_argument("--no-friendly", action="store_true")
-    ap.add_argument("--w-market", type=float, default=0.6)
-    ap.add_argument("--w-hist", type=float, default=0.3)
-    ap.add_argument("--w-squad", type=float, default=0.1)
+    ap.add_argument("--w-market", type=float, default=0.8)
+    ap.add_argument("--w-hist", type=float, default=0.15)
+    ap.add_argument("--w-squad", type=float, default=0.05)
+    ap.add_argument("--sweep", action="store_true",
+                    help="w_market in {1.0,0.8,0.6}; remainder split hist:squad = 3:1")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
     OUT.mkdir(exist_ok=True)
@@ -67,40 +69,50 @@ def main() -> None:
         print(f"  squad unavailable ({e}); dropping squad component")
         squad_ab = {t: 0.0 for t in teams}
 
-    # 4) blend + calibrate
+    # 4) blend + calibrate — single config or a w_market sweep.
+    # Inverse-sim/hist/squad above are weight-independent → computed once, shared.
+    if args.sweep:
+        configs = [(1.0, 0.0, 0.0), (0.8, 0.15, 0.05), (0.6, 0.3, 0.1)]
+    else:
+        configs = [(args.w_market, args.w_hist, args.w_squad)]
+
     print("[3/4] blend + calibrate to market ...")
-    blended = consensus.blend_strengths(
-        {"market": market_ab, "hist": hist_ab, "squad": squad_ab},
-        {"market": args.w_market, "hist": args.w_hist, "squad": args.w_squad})
-    T, sim, sse = consensus.calibrate_to_market(
-        blended, market, fixed_groups, n=args.n, seed=args.seed, n_jobs=args.jobs)
+    meta_rows = []
+    for wm, wh, ws in configs:
+        label = f"w{int(round(wm * 100)):03d}"
+        blended = consensus.blend_strengths(
+            {"market": market_ab, "hist": hist_ab, "squad": squad_ab},
+            {"market": wm, "hist": wh, "squad": ws})
+        T, sim, sse = consensus.calibrate_to_market(
+            blended, market, fixed_groups, n=args.n, seed=args.seed, n_jobs=args.jobs)
+        suffix = f"_{label}" if args.sweep else ""
+        sim.to_csv(OUT / f"champion_probs_Consensus{suffix}.csv", index=False)
+        merged, summary = compare_to_market(sim, model_col="P_Champion")
+        merged.to_csv(OUT / f"model_vs_market_Consensus{suffix}.csv", index=False)
+        meta_rows.append({
+            "label": label, "n_sims": args.n, "n_infer": args.n_infer, "iters": args.iters,
+            "temperature": T, "calibration_sse": sse,
+            "infer_final_kl": info.get("best_kl", info.get("final_kl")),
+            "w_market": wm, "w_hist": wh, "w_squad": ws,
+            "spearman": summary["spearman"], "kl_model_market": summary["kl_model_market"],
+            "model_top3_mass": summary["model_top3_mass"],
+            "market_top3_mass": summary["market_top3_mass"],
+        })
+        print(f"  [{label}] T={T:.3f} KL={summary['kl_model_market']:.4f} "
+              f"top3 model={summary['model_top3_mass']:.3f} market={summary['market_top3_mass']:.3f}")
+        print(sim.head(8).to_string(index=False))
 
-    # 5) final forecast already in `sim` at best T
+    # 5) write shared abilities + combined meta; headline = first config
     print("[4/4] writing outputs ...")
-    sim.to_csv(OUT / "champion_probs_Consensus.csv", index=False)
-
-    merged, summary = compare_to_market(sim, model_col="P_Champion")
-    merged.to_csv(OUT / "model_vs_market_Consensus.csv", index=False)
-
     pd.DataFrame([{
         "team": t, "market_ability": market_ab.get(t, np.nan),
         "hist_ability": hist_ab.get(t, np.nan), "squad_ability": squad_ab.get(t, np.nan),
-        "blended": blended.get(t, np.nan),
     } for t in teams]).to_csv(OUT / "consensus_abilities.csv", index=False)
-
-    pd.DataFrame([{
-        "n_sims": args.n, "n_infer": args.n_infer, "iters": args.iters,
-        "temperature": T, "calibration_sse": sse,
-        "infer_final_kl": info.get("best_kl", info.get("final_kl")),
-        "w_market": args.w_market, "w_hist": args.w_hist, "w_squad": args.w_squad,
-        "spearman": summary["spearman"], "kl_model_market": summary["kl_model_market"],
-        "model_top3_mass": summary["model_top3_mass"],
-        "market_top3_mass": summary["market_top3_mass"],
-    }]).to_csv(OUT / "model_Consensus_meta.csv", index=False)
-
-    print(sim.head(10).to_string(index=False))
-    print(f"T={T:.3f} KL={summary['kl_model_market']:.4f} "
-          f"top3 model={summary['model_top3_mass']:.3f} market={summary['market_top3_mass']:.3f}")
+    pd.DataFrame(meta_rows).to_csv(OUT / "model_Consensus_meta.csv", index=False)
+    # headline forecast = first config (w_market=1.0 in sweep; else the single run)
+    head_suffix = f"_{meta_rows[0]['label']}" if args.sweep else ""
+    head = pd.read_csv(OUT / f"champion_probs_Consensus{head_suffix}.csv")
+    head.to_csv(OUT / "champion_probs_Consensus.csv", index=False)
 
 
 if __name__ == "__main__":
