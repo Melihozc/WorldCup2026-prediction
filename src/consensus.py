@@ -92,3 +92,85 @@ class StrengthModel:
             lh, la = self.lambdas(h, a, neutral)
             return int(rng.poisson(lh)), int(rng.poisson(la))
         return _g
+
+
+def _build_caches(model: "StrengthModel", teams: list) -> tuple[dict, dict]:
+    """proba_cache[(a,b)]=(pw,pd,pl); score_cache[(a,b)]=flat normalized pmf.
+
+    Matches simulate.run_monte_carlo_cached expectations (square flat matrix).
+    """
+    proba_cache: dict = {}
+    score_cache: dict = {}
+    mg = model.max_goals
+    ar = np.arange(mg + 1)
+    for a in teams:
+        for b in teams:
+            if a == b:
+                continue
+            lh, la = model.lambdas(a, b, True)
+            ph = poisson.pmf(ar, lh)
+            pa = poisson.pmf(ar, la)
+            m = np.outer(ph, pa)
+            m = m / m.sum()
+            score_cache[(a, b)] = m.flatten()
+            pw = float(np.tril(m, -1).sum())
+            pd_ = float(np.trace(m))
+            pl = float(np.triu(m, 1).sum())
+            proba_cache[(a, b)] = (pw, pd_, pl)
+    return proba_cache, score_cache
+
+
+def _sim_champ_probs(strengths: dict, fixed_groups: list, scale: float,
+                     base: float, n: int, seed: int, n_jobs: int) -> dict:
+    from .simulate import run_monte_carlo_cached
+    teams = [t for g in fixed_groups for t in g]
+    model = StrengthModel(strengths, scale=scale, base=base)
+    pc, sc = _build_caches(model, teams)
+    sim = run_monte_carlo_cached(pc, sc, fixed_groups, n=n, seed=seed, n_jobs=n_jobs)
+    return dict(zip(sim["team"], sim["P_Champion"]))
+
+
+def infer_market_abilities(market_probs: pd.DataFrame, fixed_groups: list,
+                           scale: float = 1.0, base: float = 0.262,
+                           n_infer: int = 10000, n_iter: int = 30, lr: float = 0.5,
+                           seed: int = 42, n_jobs: int = 1, tol: float = 1e-3,
+                           verbose: bool = False) -> tuple[dict, dict]:
+    """Inverse simulation: find per-team strengths whose simulated champion
+    distribution reproduces the market consensus (corrects draw difficulty).
+
+    Fixed-point multiplicative log-update on champion-prob ratios. Returns
+    (strengths dict, info dict with kl_history + final_kl).
+    """
+    teams = [t for g in fixed_groups for t in g]
+    mp = dict(zip(market_probs["team"].astype(str), market_probs["market_prob"]))
+    target = np.array([max(mp.get(t, _EPS), _EPS) for t in teams])
+    target = target / target.sum()
+    # init strengths from centered log market prob
+    lp = np.log(target)
+    s = {t: float(lp[i] - lp.mean()) for i, t in enumerate(teams)}
+    # champion prob is super-linear in strength (7 KO rounds compound an edge),
+    # so a full log-ratio step overshoots → oscillation/divergence. Damp + clip.
+    damp, cap = 0.25, 0.35
+    kl_history: list = []
+    best_kl, best_s = np.inf, dict(s)
+    for it in range(n_iter):
+        psim = _sim_champ_probs(s, fixed_groups, scale, base, n_infer, seed + it, n_jobs)
+        p = np.array([max(psim.get(t, 0.0), _EPS) for t in teams])
+        p = p / p.sum()
+        # KL(sim || target): bounded (target>0 everywhere), robust to sim zeros.
+        kl = float(np.sum(p * np.log(p / target)))
+        kl_history.append(kl)
+        if kl < best_kl:
+            best_kl, best_s = kl, dict(s)
+        if verbose:
+            print(f"[infer] iter {it} KL={kl:.5f}")
+        if kl < tol:
+            break
+        delta = np.clip(damp * lr * (np.log(target) - np.log(p)), -cap, cap)
+        for i, t in enumerate(teams):
+            s[t] += float(delta[i])
+        mean_s = np.mean(list(s.values()))
+        for t in teams:
+            s[t] -= mean_s
+    return best_s, {"kl_history": kl_history, "final_kl": kl_history[-1] if kl_history else None,
+                    "best_kl": best_kl}

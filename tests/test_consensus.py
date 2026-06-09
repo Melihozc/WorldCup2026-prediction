@@ -53,3 +53,27 @@ def test_strength_goals_fn_callable_with_simulate_signature():
     pf = m.proba_fn()
     out = pf("A", "B", True)
     assert len(out) == 3
+
+
+def _toy_groups():
+    # 12 groups x 4 = 48 teams named T00..T47
+    teams = [f"T{i:02d}" for i in range(48)]
+    return [teams[i * 4:(i + 1) * 4] for i in range(12)]
+
+
+def test_infer_market_abilities_recovers_rank_and_reduces_kl():
+    groups = _toy_groups()
+    teams = [t for g in groups for t in g]
+    # synthetic market: geometric decay so ranks are unambiguous
+    raw = np.array([0.97 ** i for i in range(len(teams))])
+    market = pd.DataFrame({"team": teams, "market_prob": raw / raw.sum()})
+    strengths, info = consensus.infer_market_abilities(
+        market, groups, n_infer=3000, n_iter=8, lr=0.6, seed=1, n_jobs=1)
+    assert set(strengths) == set(teams)
+    # KL to market should drop over iterations
+    assert info["kl_history"][-1] < info["kl_history"][0]
+    # stronger market teams get higher inferred ability (rank agreement)
+    mk = market.set_index("team")["market_prob"]
+    s = pd.Series(strengths)
+    corr = np.corrcoef(mk.rank(), s.reindex(mk.index).rank())[0, 1]
+    assert corr > 0.9
