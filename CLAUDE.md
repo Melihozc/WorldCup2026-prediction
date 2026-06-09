@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **S** — Elo baseline (shipped). `scripts/run_baseline.py` → `outputs/champion_probs_S.csv`.
 - **M** — Elo + Dixon-Coles weighted ensemble, holdout-tuned ensemble weight (shipped). `scripts/run_m.py` → `outputs/champion_probs_M.csv`.
 - **M+** — Elo + XGBoost ensemble (ensemble weight `W_ELO` grid-searched on the multi-tournament holdout; recent runs pick ≈0.75 Elo / 0.25 XGB — i.e. **Elo-dominated, XGB adds little**) with Dixon-Coles for goal sampling, Pi-ratings + FIFA rank features (shipped). `scripts/run_m_plus.py` → `outputs/champion_probs_Mplus.csv`. xG_agg StatsBomb feature kept out of training (see auto-memory `project-wc2026-xg-decision.md`); production-only sanity + reserved for M++.
+- **C** — Consensus-Hybrid: bookmaker consensus as a strength signal (shipped). De-vig multi-book outright → **inverse-simulation** market ability (draw-difficulty corrected) → blend with Dixon-Coles + squad z-scores → **temperature-calibrate** champion dist to market (fixes M+ overconfidence). `scripts/run_consensus.py --sweep` → `outputs/champion_probs_Consensus.csv` (+ `_w100/_w080/_w060` sweep). Zeileis et al. paradigm. **Finding:** pure consensus (w_market=1.0) is best-calibrated (KL≈0.08, top-3 mass ≈ market); adding hist+squad signal *diverges* from market and distorts rank → independent signals don't beat the market either.
 - **L** — Bayesian hierarchical Poisson + player-level features (planned, not started).
 
 Plan file: `C:\Users\Melih\.claude\plans\u-an-n-m-zdeki-2026-serialized-hennessy.md`.
@@ -38,11 +39,15 @@ python scripts/run_m.py --n 50000 --no-friendly    # exclude friendlies from DC 
 python scripts/run_m_plus.py --n 50000 --jobs 8 --no-friendly
 python scripts/run_m_plus.py --n 50000 --jobs 8 --no-friendly --tune   # + Optuna/RandomizedSearch hyperparam search
 
-# outputs → outputs/champion_probs_{S,M,Mplus}.csv (sorted by P_Champion)
-#         + outputs/model_{M,Mplus}_meta.csv (ensemble weights, backtest metrics)
+# C scale — Consensus-Hybrid (market consensus → inverse-sim → blend → calibrate)
+python scripts/run_consensus.py --sweep --no-friendly --n 20000 --jobs 8   # w_market sweep {1.0,0.8,0.6}
+python scripts/run_consensus.py --no-friendly --n 50000 --jobs 8           # single (default 0.8/0.15/0.05)
+
+# outputs → outputs/champion_probs_{S,M,Mplus,Consensus}.csv (sorted by P_Champion)
+#         + outputs/model_{M,Mplus,Consensus}_meta.csv (weights/temperature, metrics)
 ```
 
-No tests directory wired up yet. `scripts/smoke_test.py` is the integration check — it asserts `top-5 P_Champion > 0.30`. If you add real tests, use pytest under `tests/`.
+Tests: `python -m pytest tests/test_consensus.py` (consensus modülü birim testleri; sentetik + tiny-N MC). `scripts/smoke_test.py` integration check — asserts `top-5 P_Champion > 0.30`.
 
 ## Architecture
 
@@ -83,6 +88,8 @@ Pipeline stages (top to bottom = data flow):
 14. **`src/squad.py`** — `SquadStrength` walk-forward kadro gücü öznitelikleri (Transfermarkt market value zaman serisi). Yıllık snapshot; oyuncu→ülke ataması **birincil vatandaşlıkla** (çifte-vatandaş diaspora takımları düşük değerlenir, favoriler doğru). `.diff(home, away, date)` → `(squad_value_diff, squad_age_diff)`. **Backtest sonucu: Elo'yu anlamlı geçmedi** (9-turnuva holdout, CI 0'ı kesiyor) — yine de M+'da %26 XGB ağırlığıyla taşınıyor.
 
 15. **`src/market.py`** — bookmaker outright (şampiyonluk) oranları benchmark. `load_outright_odds`, `implied_probs` (de-vig, overround), `compare_to_market(model_probs, odds_df)` → edges + Spearman + KL. Veri: `data/raw/odds/wc2026_outright_*.csv`. Outright piyasa n=1 → turnuva öncesi betimleyici, 19 Tem 2026'da notlanır. Çıktı: `outputs/model_vs_market_2026.csv`.
+
+16. **`src/consensus.py`** — Consensus-Hybrid (C). `load_consensus_odds` (çoklu-kitap de-vig + logit ortalama), `StrengthModel` (skaler güç → bağımsız-Poisson gol → W/D/L), `infer_market_abilities` (inverse-sim sabit nokta: market şampiyonluk olasılıklarını yeniden üreten güçler; **damped** log-oran adımı + clip, KL(sim‖market) izler), `hist_ability`/`squad_ability`/`_zscore_dict`/`blend_strengths`, `calibrate_to_market` (1-D sıcaklık T → market ile kare-fark min, overconfidence düzeltir). Simülasyon `run_monte_carlo_cached`'i tekrar kullanır. Testler: `tests/test_consensus.py` (sentetik + tiny-N MC).
 
 ## Conventions
 
