@@ -11,3 +11,4 @@ pyarrow>=17.0
 requests>=2.32
 xgboost>=2.0          # M+ ana sınıflandırıcı (yoksa HistGradientBoosting fallback)
 optuna>=3.6           # M+ --tune hiperparametre araması (yoksa RandomizedSearchCV fallback)
+pytest>=7.0           # tests/ (consensus modülü birim testleri)
