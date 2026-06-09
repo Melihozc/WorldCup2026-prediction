@@ -44,3 +44,51 @@ def load_consensus_odds(paths: list | None = None) -> pd.DataFrame:
     return (pd.DataFrame({"team": teams, "market_prob": p})
             .sort_values("market_prob", ascending=False)
             .reset_index(drop=True))
+
+
+class StrengthModel:
+    """Per-team scalar strength → two independent Poisson goal rates → W/D/L.
+
+    lambda_home = exp(base + scale*(s_home - s_away)/2 + home_adv*(not neutral))
+    lambda_away = exp(base - scale*(s_home - s_away)/2)
+    base = log(~1.3) baseline goals per side at equal strength.
+    """
+
+    def __init__(self, strengths: dict, scale: float = 1.0, base: float = 0.262,
+                 home_adv: float = 0.0, max_goals: int = 8):
+        self.strengths = dict(strengths)
+        self.scale = float(scale)
+        self.base = float(base)
+        self.home_adv = float(home_adv)
+        self.max_goals = int(max_goals)
+
+    def lambdas(self, home: str, away: str, neutral: bool = True) -> tuple[float, float]:
+        d = self.strengths.get(home, 0.0) - self.strengths.get(away, 0.0)
+        ha = 0.0 if neutral else self.home_adv
+        lh = float(np.exp(self.base + self.scale * d / 2.0 + ha))
+        la = float(np.exp(self.base - self.scale * d / 2.0))
+        return lh, la
+
+    def _score_matrix(self, home: str, away: str, neutral: bool) -> np.ndarray:
+        lh, la = self.lambdas(home, away, neutral)
+        ph = poisson.pmf(np.arange(self.max_goals + 1), lh)
+        pa = poisson.pmf(np.arange(self.max_goals + 1), la)
+        m = np.outer(ph, pa)
+        return m / m.sum()
+
+    def proba(self, home: str, away: str, neutral: bool = True) -> tuple[float, float, float]:
+        m = self._score_matrix(home, away, neutral)
+        pw = float(np.tril(m, -1).sum())
+        pd_ = float(np.trace(m))
+        pl = float(np.triu(m, 1).sum())
+        s = pw + pd_ + pl
+        return pw / s, pd_ / s, pl / s
+
+    def proba_fn(self):
+        return lambda h, a, neutral=True: self.proba(h, a, neutral)
+
+    def goals_fn(self):
+        def _g(rng, h, a, neutral=True):
+            lh, la = self.lambdas(h, a, neutral)
+            return int(rng.poisson(lh)), int(rng.poisson(la))
+        return _g
