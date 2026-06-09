@@ -36,6 +36,7 @@ def build_match_features(
     pi=None,
     fifa_rank=None,
     xg_agg: dict | None = None,
+    squad=None,
 ) -> pd.DataFrame:
     """Her maç için feature seti.
 
@@ -85,5 +86,9 @@ def build_match_features(
             xa = xg_agg.get(a, {"xg_per_match": 0.0, "xga_per_match": 0.0})
             row["xg_for_diff"] = xh["xg_per_match"] - xa["xg_per_match"]
             row["xg_against_diff"] = xa["xga_per_match"] - xh["xga_per_match"]
+        if squad is not None:
+            sv, sa = squad.diff(h, a, date)  # walk-forward (maç tarihinden önceki snapshot)
+            row["squad_value_diff"] = sv
+            row["squad_age_diff"] = sa
         rows.append(row)
     return pd.DataFrame(rows)

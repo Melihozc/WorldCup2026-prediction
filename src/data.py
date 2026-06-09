@@ -50,36 +50,47 @@ def filter_recent(df: pd.DataFrame, since: str = "2010-01-01") -> pd.DataFrame:
     return df[df["date"] >= pd.Timestamp(since)].reset_index(drop=True)
 
 
-def teams_2026() -> list[str]:
-    """2026 WC katılımcıları (taslak — resmi kura sonrası güncellenecek).
+# ESKİ 2025-Q4 tahmin listesi — ARTIK GEÇERSİZ. Gerçek kurada elenen takımları
+# içerir (İtalya, Polonya, Sırbistan, Danimarka, Nijerya, Kamerun...). Sadece
+# 2026_World_Cup_Groups.csv bulunamazsa fallback olarak kullanılır.
+_STALE_GUESS_2026 = [
+    # ev sahipleri
+    "United States", "Canada", "Mexico",
+    # UEFA (16)
+    "France", "England", "Spain", "Germany", "Portugal", "Netherlands",
+    "Italy", "Belgium", "Croatia", "Denmark", "Switzerland", "Poland",
+    "Austria", "Turkey", "Ukraine", "Serbia",
+    # CONMEBOL (6)
+    "Argentina", "Brazil", "Uruguay", "Colombia", "Ecuador", "Paraguay",
+    # AFC (8)
+    "Japan", "South Korea", "Iran", "Saudi Arabia", "Australia",
+    "Qatar", "Iraq", "Uzbekistan",
+    # CAF (9)
+    "Morocco", "Senegal", "Egypt", "Nigeria", "Algeria", "Tunisia",
+    "Cameroon", "Ivory Coast", "Ghana",
+    # CONCACAF (3 ek)
+    "Costa Rica", "Panama", "Jamaica",
+    # OFC (1)
+    "New Zealand",
+    # playoff (2 — varsayım)
+    "Peru", "DR Congo",
+]
 
-    Ev sahipleri otomatik: USA, Canada, Mexico.
-    Geri kalan 45 yer kıtasal eleme. Aşağıdaki liste 2025-Q4 itibariyle
-    kesinleşmiş veya yüksek olasılıklı takımlardan örnek; kullanıcı
-    `data/raw/user_provided/teams_2026.csv` koyarsa onu kullan.
+
+def teams_2026() -> list[str]:
+    """2026 WC katılımcıları — GERÇEK kuradan türetilir.
+
+    Tek doğru kaynak: `data/raw/2026_World_Cup_Groups.csv` (load_groups_2026).
+    CSV yoksa eski 2025-Q4 tahminine düşer ve UYARI basar (o liste gerçekte
+    elenen takımları içerir; üretim için kullanma).
     """
-    return [
-        # ev sahipleri
-        "United States", "Canada", "Mexico",
-        # UEFA (16)
-        "France", "England", "Spain", "Germany", "Portugal", "Netherlands",
-        "Italy", "Belgium", "Croatia", "Denmark", "Switzerland", "Poland",
-        "Austria", "Turkey", "Ukraine", "Serbia",
-        # CONMEBOL (6)
-        "Argentina", "Brazil", "Uruguay", "Colombia", "Ecuador", "Paraguay",
-        # AFC (8)
-        "Japan", "South Korea", "Iran", "Saudi Arabia", "Australia",
-        "Qatar", "Iraq", "Uzbekistan",
-        # CAF (9)
-        "Morocco", "Senegal", "Egypt", "Nigeria", "Algeria", "Tunisia",
-        "Cameroon", "Ivory Coast", "Ghana",
-        # CONCACAF (3 ek)
-        "Costa Rica", "Panama", "Jamaica",
-        # OFC (1)
-        "New Zealand",
-        # playoff (2 — varsayım)
-        "Peru", "DR Congo",
-    ]
+    try:
+        groups = load_groups_2026()
+        return [t for g in groups for t in g]
+    except FileNotFoundError:
+        print("  UYARI: 2026_World_Cup_Groups.csv bulunamadı — eski 2025-Q4 tahmin "
+              "listesi kullanılıyor (İtalya/Polonya/Sırbistan... gerçekte elendi).")
+        return list(_STALE_GUESS_2026)
 
 
 # Türkçe -> İngilizce takım adı (results.csv İngilizce kullanıyor)

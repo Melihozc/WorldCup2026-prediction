@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **S** — Elo baseline (shipped). `scripts/run_baseline.py` → `outputs/champion_probs_S.csv`.
 - **M** — Elo + Dixon-Coles weighted ensemble, holdout-tuned ensemble weight (shipped). `scripts/run_m.py` → `outputs/champion_probs_M.csv`.
-- **M+** — Elo + XGBoost ensemble (W_ELO=0.0 → effectively XGB-only) with Dixon-Coles for goal sampling, Pi-ratings + FIFA rank features (shipped). `scripts/run_m_plus.py` → `outputs/champion_probs_Mplus.csv`. xG_agg StatsBomb feature kept out of training (see auto-memory `project-wc2026-xg-decision.md`); production-only sanity + reserved for M++.
+- **M+** — Elo + XGBoost ensemble (ensemble weight `W_ELO` grid-searched on the multi-tournament holdout; recent runs pick ≈0.75 Elo / 0.25 XGB — i.e. **Elo-dominated, XGB adds little**) with Dixon-Coles for goal sampling, Pi-ratings + FIFA rank features (shipped). `scripts/run_m_plus.py` → `outputs/champion_probs_Mplus.csv`. xG_agg StatsBomb feature kept out of training (see auto-memory `project-wc2026-xg-decision.md`); production-only sanity + reserved for M++.
 - **L** — Bayesian hierarchical Poisson + player-level features (planned, not started).
 
 Plan file: `C:\Users\Melih\.claude\plans\u-an-n-m-zdeki-2026-serialized-hennessy.md`.
@@ -34,8 +34,9 @@ python scripts/run_baseline.py --since 2010-01-01
 python scripts/run_m.py --n 50000                  # default WC2022 holdout
 python scripts/run_m.py --n 50000 --no-friendly    # exclude friendlies from DC fit
 
-# M+ scale — Elo + XGBoost (W_ELO=0.0 currently optimal) + DC goals
+# M+ scale — Elo + XGBoost (W_ELO grid-searched on holdout; ≈0.75 Elo recent) + DC goals
 python scripts/run_m_plus.py --n 50000 --jobs 8 --no-friendly
+python scripts/run_m_plus.py --n 50000 --jobs 8 --no-friendly --tune   # + Optuna/RandomizedSearch hyperparam search
 
 # outputs → outputs/champion_probs_{S,M,Mplus}.csv (sorted by P_Champion)
 #         + outputs/model_{M,Mplus}_meta.csv (ensemble weights, backtest metrics)
@@ -47,7 +48,7 @@ No tests directory wired up yet. `scripts/smoke_test.py` is the integration chec
 
 Pipeline stages (top to bottom = data flow):
 
-1. **`src/data.py`** — loads Kaggle `results.csv` into a sorted-by-date DataFrame; provides `teams_2026()` (hardcoded participant list, override via `data/raw/user_provided/teams_2026.csv`). The hardcoded list is a 2025-Q4 best guess; update once real qualification finishes.
+1. **`src/data.py`** — loads Kaggle `results.csv` into a sorted-by-date DataFrame; provides `teams_2026()` which now **derives the 48 participants from the real draw** (`data/raw/2026_World_Cup_Groups.csv` via `load_groups_2026()`), falling back to a stale 2025-Q4 guess (`_STALE_GUESS_2026`) only if that CSV is missing. `load_groups_2026()` is the single source of truth for the field.
 
 2. **`src/elo.py`** — `EloRatings` (S model). `fit(matches_df)` walks chronologically, updates in-place; `predict_proba(home, away, neutral)` returns `(P_W, P_D, P_L)`. Also: `EloRatings.from_snapshot()` loads `data/raw/eloratings/World.tsv` (current). `HistoricalElo` walks yearly snapshots for **walk-forward, leakage-free** backtest (`predict_proba(h, a, neutral, date)`). Two non-obvious pieces:
    - K-factor varies by `tournament` string (`K_BY_TOURNAMENT`); unknown → `DEFAULT_K = 30`.
@@ -67,7 +68,7 @@ Pipeline stages (top to bottom = data flow):
    - `run_monte_carlo(elo, ...)` — S, Elo-only path with consistency-forced goals.
    - `run_monte_carlo_cb(proba_fn, goals_fn, ...)` — M, callback-based, model-agnostic.
    - `run_monte_carlo_cached(proba_cache, score_cache, ...)` + `build_cache(proba_fn, goals_fn, teams)` — M+, precomputed pairwise matrices for parallel speed.
-   Knockout draws are uniformly random — no real bracket-pairing logic yet.
+   Knockout bracket follows the **official 2026 R32 schedule** (`_BRACKET_DEF` in `simulate.py`): group winners / runners-up / best-8 thirds are slotted into FIFA's fixed bracket, with backtracking third-place assignment (`_assign_thirds`). It is **not** a random draw.
 
 9. **`src/backtest.py`** — `split_by_tournament(df, holdout_tournament, holdout_year)`, `evaluate_predictor(proba_fn, test_df, date_aware=False)`, `outcomes_from_df`. Used by M and M+ runners.
 
@@ -75,9 +76,13 @@ Pipeline stages (top to bottom = data flow):
 
 11. **`scripts/run_m.py`** — M wiring: HistoricalElo (backtest) + EloRatings.from_snapshot (production), DixonColes fit on `--since 2014-01-01` (default), grid-search ensemble weight `w` on holdout (currently log-loss; RPS preferred per Conventions). `--no-friendly` excludes friendly maçlar from DC fit (recommended; M+ found this helps).
 
-12. **`scripts/run_m_plus.py`** — M+ wiring: Pi-ratings + FIFA rank + DC features → XGB; W_ELO=0.0, W_XGB=1.0 (grid-search optimal — XGB already sees `elo_diff`). DC kept for goal sampling (`score_matrix`). WC2022 backtest: XGB RPS=0.2056 vs Elo RPS=0.2204.
+12. **`scripts/run_m_plus.py`** — M+ wiring: Pi-ratings + FIFA rank + DC features → XGB; ensemble weight `W_ELO` grid-searched on the multi-tournament holdout via `find_elo_weight` (recent runs ≈0.75 Elo / 0.25 XGB — Elo-dominated). DC kept for goal sampling (`score_matrix`). **Reality check:** on the 9-tournament holdout the full stack barely beats plain Elo (RPS 0.18939 vs 0.18986); XGB alone (0.19387) is *worse* than Elo. Single-tournament WC2022: XGB RPS=0.2056 vs Elo RPS=0.2204. Now also reports bootstrap RPS CIs + calibration; benchmarked against the live bookmaker market (`src/market.py`).
 
-13. **`src/eval.py`** — `log_loss`, `brier`, `rps`, `accuracy`, `report`. **RPS is the primary metric** for football (ordered W/D/L); prefer over accuracy when comparing models.
+13. **`src/eval.py`** — `log_loss`, `brier`, `rps`, `accuracy`, `report`. **RPS is the primary metric** for football (ordered W/D/L); prefer over accuracy when comparing models. Plus `bootstrap_rps_ci` (RPS + bootstrap CI), `bootstrap_rps_diff` (paired significance: does A beat B?), `reliability` (top-label calibration + ECE).
+
+14. **`src/squad.py`** — `SquadStrength` walk-forward kadro gücü öznitelikleri (Transfermarkt market value zaman serisi). Yıllık snapshot; oyuncu→ülke ataması **birincil vatandaşlıkla** (çifte-vatandaş diaspora takımları düşük değerlenir, favoriler doğru). `.diff(home, away, date)` → `(squad_value_diff, squad_age_diff)`. **Backtest sonucu: Elo'yu anlamlı geçmedi** (9-turnuva holdout, CI 0'ı kesiyor) — yine de M+'da %26 XGB ağırlığıyla taşınıyor.
+
+15. **`src/market.py`** — bookmaker outright (şampiyonluk) oranları benchmark. `load_outright_odds`, `implied_probs` (de-vig, overround), `compare_to_market(model_probs, odds_df)` → edges + Spearman + KL. Veri: `data/raw/odds/wc2026_outright_*.csv`. Outright piyasa n=1 → turnuva öncesi betimleyici, 19 Tem 2026'da notlanır. Çıktı: `outputs/model_vs_market_2026.csv`.
 
 ## Conventions
 

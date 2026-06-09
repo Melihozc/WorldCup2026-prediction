@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 from src.data import load_groups_2026
 from src.elo import EloRatings
 from src.simulate import run_monte_carlo
+from src.market import compare_to_market
 
 
 def _norm(s: str) -> str:
@@ -24,7 +25,7 @@ def _norm(s: str) -> str:
     return s.strip().lower()
 
 
-def main(n_sims: int = 10000, snapshot: str = "World.tsv") -> None:
+def main(n_sims: int = 50000, snapshot: str = "World.tsv") -> None:
     print(f"[1/3] Elo snapshot: {snapshot}")
     elo = EloRatings.from_snapshot(snapshot)
     top10 = elo.to_frame().head(10)
@@ -46,6 +47,18 @@ def main(n_sims: int = 10000, snapshot: str = "World.tsv") -> None:
     print("\nTop 15:")
     print(out.head(15).to_string(index=False))
     print(f"\n-> {out_path}")
+
+    # --- Market benchmark (M+ ile aynı desen, src/market.py reuse) ---
+    try:
+        merged, summ = compare_to_market(out)
+        mvm_path = ROOT / "outputs" / "model_vs_market_S.csv"
+        merged.to_csv(mvm_path, index=False)
+        print(f"\nMarket benchmark (overround={summ['overround']:.3f}):")
+        print(f"  Spearman(model,market)={summ['spearman']:.3f}  KL(model||market)={summ['kl_model_market']:.3f}")
+        print(f"  Concentration — model top-3={summ['model_top3_mass']:.3f}  vs market top-3={summ['market_top3_mass']:.3f}")
+        print(f"  -> {mvm_path}")
+    except FileNotFoundError as e:
+        print(f"\n  Market benchmark atlandı (odds yok): {e}")
 
 
 if __name__ == "__main__":
