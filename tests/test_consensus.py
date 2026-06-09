@@ -97,3 +97,22 @@ def test_blend_handles_missing_component_team():
     # B: (1*1 + 1*0)/2 = 0.5 ; A: (1+3)/2 = 2.0
     assert blended["A"] == pytest.approx(2.0)
     assert blended["B"] == pytest.approx(0.5)
+
+
+def test_calibrate_to_market_reduces_top_concentration():
+    groups = _toy_groups()
+    teams = [t for g in groups for t in g]
+    raw = np.array([0.95 ** i for i in range(len(teams))])
+    market = pd.DataFrame({"team": teams, "market_prob": raw / raw.sum()})
+    # deliberately over-sharp strengths (large spread → overconfident champ dist)
+    sharp = {t: 3.0 * (len(teams) - i) / len(teams) for i, t in enumerate(teams)}
+    T, sim, sse = consensus.calibrate_to_market(
+        sharp, market, groups, n=3000, seed=2, n_jobs=1,
+        t_grid=np.linspace(0.2, 1.2, 6))
+    assert 0.2 <= T <= 1.2
+    # calibrated top-3 champ mass should be closer to market top-3 mass than raw
+    mk_top3 = float(market.nlargest(3, "market_prob")["market_prob"].sum())
+    cal_top3 = float(sim.nlargest(3, "P_Champion")["P_Champion"].sum())
+    raw_sim = consensus._sim_champ_probs(sharp, groups, 1.0, 0.262, 3000, 2, 1)
+    raw_top3 = sum(sorted(raw_sim.values(), reverse=True)[:3])
+    assert abs(cal_top3 - mk_top3) <= abs(raw_top3 - mk_top3) + 1e-6

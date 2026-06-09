@@ -212,3 +212,32 @@ def blend_strengths(components: dict, weights: dict) -> dict:
     wsum = float(sum(weights.values())) or 1.0
     return {t: float(sum(weights[n] * components[n].get(t, 0.0) for n in components) / wsum)
             for t in teams}
+
+
+def calibrate_to_market(strengths: dict, market_probs: pd.DataFrame,
+                        fixed_groups: list, scale: float = 1.0, base: float = 0.262,
+                        n: int = 20000, seed: int = 42, n_jobs: int = 1,
+                        t_grid=None) -> tuple[float, pd.DataFrame, float]:
+    """1-D temperature search: multiply all strengths by T, pick T minimizing
+    squared diff between simulated champion probs and market (overconfidence fix).
+
+    Returns (best_T, simulated stage-prob DataFrame at best_T, best_sse).
+    """
+    from .simulate import run_monte_carlo_cached
+    if t_grid is None:
+        t_grid = np.linspace(0.3, 1.5, 13)
+    teams = [t for g in fixed_groups for t in g]
+    mp = dict(zip(market_probs["team"].astype(str), market_probs["market_prob"]))
+    target = np.array([mp.get(t, 0.0) for t in teams])
+    best: tuple | None = None
+    for T in t_grid:
+        s = {t: float(T) * v for t, v in strengths.items()}
+        model = StrengthModel(s, scale=scale, base=base)
+        pc, sc = _build_caches(model, teams)
+        sim = run_monte_carlo_cached(pc, sc, fixed_groups, n=n, seed=seed, n_jobs=n_jobs)
+        psim = dict(zip(sim["team"], sim["P_Champion"]))
+        p = np.array([psim.get(t, 0.0) for t in teams])
+        sse = float(np.sum((p - target) ** 2))
+        if best is None or sse < best[2]:
+            best = (float(T), sim, sse)
+    return best
