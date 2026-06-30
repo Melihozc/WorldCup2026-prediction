@@ -11,11 +11,17 @@ Bu çalışma, 2026 FIFA Dünya Kupası (48 takım, 104 maç) için olasılıksa
 Dixon-Coles Poisson eklentisi (M), makine öğrenmesi ensemble'ı (M+) ve bahis piyasası
 konsensüsünü bir **güç sinyali** olarak modele dahil eden Konsensüs-Hibrit (C). Temel
 bulgu iki yönlüdür: (1) tarihsel veriye dayalı zengin makine öğrenmesi yığını, çok-turnuvalı
-holdout üzerinde sade Elo tabanını **anlamlı şekilde geçememektedir** (dürüst null sonuç);
-(2) bahis piyasası konsensüsü modele dahil edildiğinde, en iyi kalibre edilmiş ve piyasaya
-en sadık tahmin **saf konsensüs** ağırlığında elde edilir — tarihsel ve kadro sinyalleri
-eklendikçe tahmin piyasadan uzaklaşıp sıralamayı bozar. Model, kesin sonuç veren bir araç
-değil, turnuva belirsizliğini nicelleştiren bir çerçeve olarak konumlandırılmıştır.
+holdout üzerinde sade Elo tabanını **anlamlı şekilde geçememektedir** (dürüst null sonuç) —
+eklenen tüm öznitelikler (kadro değeri, FIFA sıralaması, Pi-rating) Elo ile yüksek korelasyonlu
+olduğundan bağımsız sinyal taşımaz; (2) bahis piyasası konsensüsü modele dahil edildiğinde
+tahmin yalnızca piyasayı yeniden üretir — bu durumda model özgün bir tahmin değil, piyasanın
+bir **kopyası** olur. Bu nedenle nihai/headline deliverable olarak **bağımsız Elo modeli**
+seçilmiştir; bahis piyasası konsensüsü ana model değil yalnızca **kıyas (benchmark)** olarak
+kullanılır. Bu tercih bilinçlidir: piyasa fiyatı, kamuya kapalı özel veri ve içeriden bilgiyi
+(kadro, sakatlık, kamp durumu) toplar; onu yöntem olarak kopyalamak değil, çıktısını bir
+sağlama noktası olarak kullanmak akademik olarak daha savunulabilir bir konumdur. Model,
+kesin sonuç veren bir araç değil, turnuva belirsizliğini nicelleştiren bir çerçeve olarak
+konumlandırılmıştır.
 
 ---
 
@@ -75,8 +81,11 @@ baskın özellik daima yetenek parametresidir.
 | S | Elo + sezgisel beraberlik | shipped |
 | M | Elo + Dixon-Coles ensemble | shipped |
 | M+ | Elo + XGBoost + DC + Pi-rating + FIFA + kadro | shipped |
-| **C** | **Konsensüs-Hibrit (bu çalışmanın katkısı)** | **shipped** |
+| **C** | **Konsensüs-Hibrit (piyasa kıyas hattı)** | **shipped** |
 | L | Bayesian hiyerarşik Poisson | planlanan |
+
+Buna ek olarak, turnuva-düzeyi şampiyonluk simülasyonundan ayrı, **tek maç düzeyinde
+interaktif tahmin** sağlayan bir araç da geliştirilmiştir (`scripts/oracle.py`, §5).
 
 ### 2.6 Konsensüs-Hibrit (C) yöntemi
 1. **Çoklu-kitap konsensüs:** her bahisçinin outright oranları ayrı ayrı de-vig edilir
@@ -139,22 +148,47 @@ M+ ile karşılaştırma, kalibrasyon kazanımını net gösterir: M+ piyasaya K
 kütle = **0.567** (aşırı-güvenli) iken, Konsensüs-Hibrit (w=1.0) KL = **0.005** ve top-3 kütle
 = **0.364** (≈ piyasa 0.384) — overconfidence ortadan kalkar.
 
-### 3.4 Nihai 2026 tahmini (headline = saf konsensüs)
+### 3.4 Nihai 2026 tahmini (headline = bağımsız Elo)
 
-| Sıra | Takım | P_Şampiyon | Piyasa |
-|---|---|---|---|
-| 1 | İspanya | 13.4% | 14.0% |
-| 2 | Fransa | 12.6% | 14.0% |
-| 3 | İngiltere | 10.4% | 10.3% |
-| 4 | Arjantin | 8.6% | 8.6% |
-| 5 | Brezilya | 8.1% | 8.6% |
-| 6 | Portekiz | 7.9% | 7.7% |
-| 7 | Almanya | 4.8% | 5.1% |
-| 8 | Hollanda | 3.8% | 3.7% |
+Nihai deliverable, bahis piyasasına bakmadan tüm tarihsel maçlardan kurulan **bağımsız Elo
+modelidir**. Şampiyonluk olasılıkları, resmi 2026 Son-32 bracket'i üzerinde Monte Carlo ile
+üretilmiştir (`outputs/champion_probs_Elo.csv`):
 
-Bu tahmin, gerçek bir izleme geçmişi olan tek kamuya açık yöntemle (Zeileis vd.) aynı
-paradigmadadır ve maç-sıralama düzeyinde piyasayla yüksek uyum gösterir (Spearman 0.988).
-İnverse-simülasyon 22 iterasyonda yakınsadı (KL 0.568 → 0.003).
+| Sıra | Takım | P_Şampiyon (Elo) |
+|---|---|---|
+| 1 | İspanya | 26.9% |
+| 2 | Fransa | 17.0% |
+| 3 | Arjantin | 16.0% |
+| 4 | İngiltere | 7.3% |
+| 5 | Brezilya | 5.6% |
+| 6 | Portekiz | 3.9% |
+| 7 | Hollanda | 3.5% |
+| 8 | Kolombiya | 3.2% |
+| 9 | Almanya | 2.6% |
+| 10 | Ekvador | 2.4% |
+
+### 3.5 Piyasa kıyası: neden konsensüs ana model değil
+
+Konsensüs-Hibrit, ana model olarak değil yalnızca **kıyas (benchmark)** olarak kullanılır.
+Saf konsensüs (w=1.0) ile bağımsız Elo'nun karşılaştırması:
+
+| Takım | Elo | Konsensüs (≈piyasa) |
+|---|---|---|
+| İspanya | 26.9% | 13.4% |
+| Fransa | 17.0% | 12.6% |
+| Arjantin | 16.0% | 8.6% |
+| İngiltere | 7.3% | 10.4% |
+| Brezilya | 5.6% | 8.1% |
+
+İki gözlem: (1) ham Elo, favorilere piyasadan **belirgin daha fazla** olasılık verir
+(İspanya %27 vs %13) — yani aşırı-güvenlidir (§3.2); piyasa turnuva varyansını fiyatlayıp
+dağılımı yumuşatır. (2) Konsensüs hattı (saf, w=1.0) piyasayı neredeyse birebir yeniden
+üretir (Spearman 0.988, KL 0.005); bu da onu **özgün bir model değil, piyasanın türevi**
+yapar. Konsensüse kendi bağımsız sinyalimizi (tarihsel + kadro) eklediğimizde tahmin
+piyasadan uzaklaşıp sıralamayı bozar (KL 0.005 → 0.137). Dolayısıyla konsensüs yalnızca
+"modelimiz piyasaya göre nerede duruyor" sorusunu yanıtlayan bir sağlama aracıdır; nihai
+tahmin bilinçli olarak bağımsız Elo'dur. İnverse-simülasyon kıyas hattı 22 iterasyonda
+yakınsamıştır (KL 0.568 → 0.003).
 
 ---
 
@@ -166,16 +200,65 @@ bozar. Bu, başarısızlık değil, olgun bir sonuçtur — bahis piyasası mevc
 toplayan çok güçlü bir benchmark'tır ve onu yenmek pratikte çok zordur (Opta'nın kendi
 ifadesiyle model "piyasa fiyatları için bir sağlama aracı" olarak en iyi kullanılır).
 
-Katkı, bahis konsensüsünü bir model girdisine dönüştüren ters-simülasyon + kalibrasyon
-hattıdır; bu hat M+'nın aşırı-güvenini düzeltir ve piyasa-rekabetçi, kalibre bir 2026
-tahmini üretir. Sınırlamalar: outright piyasası n=1'dir (gerçek not ancak 19 Temmuz 2026'da
-verilir); kadro değeri sinyali çifte-vatandaş diaspora takımlarını düşük değerler; konsensüs
-şu an tek bahisçi snapshot'ına dayanır (çoklu-kitap canlı toplama bir genişleme hedefidir).
+Bu noktada bilinçli bir tasarım kararı verilmiştir: **piyasayı geçemiyor olmak, piyasayı
+kopyalamak için bir gerekçe değildir.** Saf konsensüs hattı piyasayı neredeyse birebir
+yeniden üretir; bunu nihai model ilan etmek, projeyi "betting odds'u de-vig edip yeniden
+yazdık" konumuna düşürür — özgün katkı sıfırdır ve piyasanın içindeki özel/insider veriye
+(kadro, sakatlık, kamp durumu) erişimimiz olmadığından yöntemi de tekrarlayamayız. Bunun
+yerine nihai/headline deliverable **bağımsız Elo modelidir**: 1872'den bu yana ~49k maçtan
+piyasaya bakmadan kurulmuş, yorumlanabilir ve tümüyle yeniden üretilebilir. Konsensüs-Hibrit
+hattı korunur, ancak rolü **kıyas**tır: "modelimiz piyasaya göre nerede" sorusunu yanıtlar ve
+Elo'nun aşırı-güvenini (§3.2, §3.5) niceliksel olarak ortaya koyar.
+
+Bu çerçevenin dürüst maliyeti: bağımsız Elo, piyasaya göre kalibrasyonda zayıftır
+(favorilere fazla ağırlık verir). Tez bunu gizlemez — aşırı-güven açıkça raporlanır ve
+konsensüs kıyası tam da bu zayıflığı ölçmek için durur. Sınırlamalar: outright piyasası
+n=1'dir (gerçek not ancak 19 Temmuz 2026'da verilir); kadro değeri sinyali çifte-vatandaş
+diaspora takımlarını düşük değerler; konsensüs şu an tek bahisçi snapshot'ına dayanır
+(çoklu-kitap canlı toplama bir genişleme hedefidir).
 
 Gelecek çalışma: (i) tam Bayesian hiyerarşik bivariate Poisson (L ölçeği) — posterior
 belirsizliğini yayarak aşırı-güveni ilkesel biçimde düzeltir, "overshrinkage" için karışım
 modeli gerekir (Baio & Blangiardo, 2010); (ii) çoklu-bahisçi canlı oran toplama ile gerçek
 konsensüs; (iii) turnuva sonrası canlı puanlama (donmuş tahminler hazır).
+
+---
+
+## 5. İnteraktif Tahmin: Tek Maç Düzeyi (`scripts/oracle.py`)
+
+Turnuva-düzeyi şampiyonluk simülasyonu, "kim kupayı kaldırır" sorusunu yanıtlar ama tek bir
+eşleşmenin olasılıklarını doğrudan göstermez. Bu boşluğu kapatmak için, herhangi iki takım
+arasında anlık tahmin üreten bir komut satırı aracı geliştirilmiştir. Araç, şampiyonluk
+hattıyla aynı çekirdeği (Elo + Dixon-Coles) kullanır ama tek maça odaklanır.
+
+**Yöntem.** Verilen `(A, B)` çifti için:
+- **W/D/L olasılıkları:** Elo ve Dixon-Coles ayrı ayrı tahmin üretir; holdout'ta tune edilmiş
+  ağırlıkla (w_elo = 0.65, w_dc = 0.35) harmanlanır.
+- **Beklenen gol (xG):** Dixon-Coles λ parametreleri (λ_home = exp(α_A − β_B + γ)).
+- **Skor dağılımı:** Dixon-Coles skor matrisi (τ düzeltmeli) ile en olası skor ve top-5
+  skorun olasılıkları. Bu, tek skor veren basit modellerin ötesine geçer — tüm skor
+  dağılımını gösterir.
+
+**Örnek — Brezilya vs Japonya** (nötr saha):
+
+| Sonuç | Olasılık |
+|---|---|
+| Brezilya galip | 52.7% |
+| Beraberlik | 24.0% |
+| Japonya galip | 23.2% |
+
+Beklenen gol: Brezilya 1.74 – 0.60 Japonya. En olası skor: **1-0**.
+Top-5 skor: 1-0 (16.4%), 2-0 (14.5%), 1-1 (10.4%), 0-0 (9.9%), 2-1 (8.8%).
+
+**Kullanım.**
+```bash
+python scripts/oracle.py                       # interaktif döngü
+python scripts/oracle.py "Spain vs France"     # tek seferlik tahmin
+python scripts/oracle.py --since 2014-01-01 --no-friendly
+```
+Döngü içinde `<takım> vs <takım>` formatı (vs | v | - | x | , ayraçları), `teams` (2026
+takım listesi) ve `quit` komutları desteklenir; takım adları gevşek eşleşir (tam → prefix →
+substring). Araç, şampiyonluk simülasyonundan bağımsız çalışır ve onun çıktısına dokunmaz.
 
 ---
 
@@ -202,6 +285,8 @@ konsensüs; (iii) turnuva sonrası canlı puanlama (donmuş tahminler hazır).
 
 ---
 
-*Üretim çıktıları: `outputs/champion_probs_Consensus.csv` (+ `_w100/_w080/_w060`),
-`outputs/model_Consensus_meta.csv`, `outputs/consensus_abilities.csv`. Birim testler:
-`tests/test_consensus.py`. Plan: `docs/superpowers/plans/2026-06-09-consensus-hybrid.md`.*
+*Üretim çıktıları: **headline** `outputs/champion_probs_Elo.csv` (bağımsız Elo, nihai
+tahmin); kıyas `outputs/champion_probs_Consensus.csv` (+ `_w100/_w080/_w060`),
+`outputs/model_Consensus_meta.csv`, `outputs/consensus_abilities.csv`. İnteraktif tek-maç
+aracı: `scripts/oracle.py`. Birim testler: `tests/test_consensus.py`. Plan:
+`docs/superpowers/plans/2026-06-09-consensus-hybrid.md`.*
